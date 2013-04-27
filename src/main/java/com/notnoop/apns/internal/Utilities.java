@@ -40,18 +40,26 @@ import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.Socket;
 import java.security.KeyStore;
+import java.security.cert.Certificate;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
+
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import sun.security.x509.X509CertImpl;
+
 import com.notnoop.exceptions.InvalidSSLConfig;
 import com.notnoop.exceptions.NetworkIOException;
+
 
 public final class Utilities {
     private static Logger logger = LoggerFactory.getLogger(Utilities.class);
@@ -70,76 +78,115 @@ public final class Utilities {
 
     public static final int MAX_PAYLOAD_LENGTH = 256;
 
-    private Utilities() { throw new AssertionError("Uninstantiable class"); }
+
+    private Utilities() {
+        throw new AssertionError("Uninstantiable class");
+    }
+
 
     public static SSLSocketFactory newSSLSocketFactory(final InputStream cert, final String password,
-         final String ksType, final String ksAlgorithm) throws InvalidSSLConfig {
+            final String ksType, final String ksAlgorithm) throws InvalidSSLConfig {
         final SSLContext context = newSSLContext(cert, password, ksType, ksAlgorithm);
         return context.getSocketFactory();
     }
 
-    public static SSLContext newSSLContext(final InputStream cert, final String password,
-            final String ksType, final String ksAlgorithm) throws InvalidSSLConfig {
-           try {
-               final KeyStore ks = KeyStore.getInstance(ksType);
-               ks.load(cert, password.toCharArray());
-               return newSSLContext(ks, password, ksAlgorithm);
-           } catch (final Exception e) {
-               throw new InvalidSSLConfig(e);
-           }
-       }
-    
-    public static SSLContext newSSLContext(final KeyStore ks, final String password,
+
+    public static SSLContext newSSLContext(final InputStream cert, final String password, final String ksType,
             final String ksAlgorithm) throws InvalidSSLConfig {
-           try {
-               // Get a KeyManager and initialize it
-               final KeyManagerFactory kmf = KeyManagerFactory.getInstance(ksAlgorithm);
-               kmf.init(ks, password.toCharArray());
+        try {
+            final KeyStore ks = KeyStore.getInstance(ksType);
+            ks.load(cert, password.toCharArray());
+            return newSSLContext(ks, password, ksAlgorithm);
+        }
+        catch (final Exception e) {
+            throw new InvalidSSLConfig(e);
+        }
+    }
 
-               // Get a TrustManagerFactory with the DEFAULT KEYSTORE, so we have all
-               // the certificates in cacerts trusted
-               final TrustManagerFactory tmf = TrustManagerFactory.getInstance(ksAlgorithm);
-               tmf.init((KeyStore)null);
 
-               // Get the SSLContext to help create SSLSocketFactory
-               final SSLContext sslc = SSLContext.getInstance("TLS");
-               sslc.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
-               return sslc;
-           } catch (final Exception e) {
-               throw new InvalidSSLConfig(e);
-           }
-       }
+    public static boolean isProduction(final InputStream cert, final String password, final String ksType,
+            final String ksAlgorithm) throws InvalidSSLConfig {
+        try {
+            final KeyStore ks = KeyStore.getInstance(ksType);
+            ks.load(cert, password.toCharArray());
+            Enumeration<String> it = ks.aliases();
+            while (it.hasMoreElements()) {
+                String alias = it.nextElement();
+                Certificate c = ks.getCertificate(alias);
+                X509CertImpl cimp1 = new X509CertImpl(c.getEncoded());
+                return cimp1.getSubjectDN().getName().contains("Apple Production IOS Push Services:");
+
+            }
+            // default is production push service.
+            return true;
+        }
+        catch (final Exception e) {
+            throw new InvalidSSLConfig(e);
+        }
+    }
+
+
+    public static SSLContext newSSLContext(final KeyStore ks, final String password, final String ksAlgorithm)
+            throws InvalidSSLConfig {
+        try {
+            // Get a KeyManager and initialize it
+            final KeyManagerFactory kmf = KeyManagerFactory.getInstance(ksAlgorithm);
+            kmf.init(ks, password.toCharArray());
+
+            // Get a TrustManagerFactory with the DEFAULT KEYSTORE, so we have
+            // all
+            // the certificates in cacerts trusted
+            final TrustManagerFactory tmf = TrustManagerFactory.getInstance(ksAlgorithm);
+            tmf.init((KeyStore) null);
+
+            // Get the SSLContext to help create SSLSocketFactory
+            final SSLContext sslc = SSLContext.getInstance("TLS");
+            sslc.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+            return sslc;
+        }
+        catch (final Exception e) {
+            throw new InvalidSSLConfig(e);
+        }
+    }
 
     private static final Pattern pattern = Pattern.compile("[ -]");
+
+
     public static byte[] decodeHex(final String deviceToken) {
         final String hex = pattern.matcher(deviceToken).replaceAll("");
 
         final byte[] bts = new byte[hex.length() / 2];
         for (int i = 0; i < bts.length; i++) {
-            bts[i] = (byte) (charval(hex.charAt(2*i)) * 16 + charval(hex.charAt(2*i + 1)));
+            bts[i] = (byte) (charval(hex.charAt(2 * i)) * 16 + charval(hex.charAt(2 * i + 1)));
         }
         return bts;
     }
 
+
     private static int charval(final char a) {
         if ('0' <= a && a <= '9') {
-            return (a - '0');
-        } else if ('a' <= a && a <= 'f') {
-            return (a - 'a') + 10;
-        } else if ('A' <= a && a <= 'F') {
-            return (a - 'A') + 10;
-        } else {
+            return a - '0';
+        }
+        else if ('a' <= a && a <= 'f') {
+            return a - 'a' + 10;
+        }
+        else if ('A' <= a && a <= 'F') {
+            return a - 'A' + 10;
+        }
+        else {
             throw new RuntimeException("Invalid hex character: " + a);
         }
     }
 
-    private static final char base[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    private static final char base[] =
+        { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
+
 
     public static String encodeHex(final byte[] bytes) {
         final char[] chars = new char[bytes.length * 2];
 
         for (int i = 0; i < bytes.length; ++i) {
-            final int b = (bytes[i]) & 0xFF;
+            final int b = bytes[i] & 0xFF;
             chars[2 * i] = base[b >>> 4];
             chars[2 * i + 1] = base[b & 0xF];
         }
@@ -147,13 +194,16 @@ public final class Utilities {
         return new String(chars);
     }
 
+
     public static byte[] toUTF8Bytes(final String s) {
         try {
             return s.getBytes("UTF-8");
-        } catch (final UnsupportedEncodingException e) {
+        }
+        catch (final UnsupportedEncodingException e) {
             throw new RuntimeException(e);
         }
     }
+
 
     public static byte[] marshall(final byte command, final byte[] deviceToken, final byte[] payload) {
         final ByteArrayOutputStream boas = new ByteArrayOutputStream();
@@ -166,13 +216,15 @@ public final class Utilities {
             dos.writeShort(payload.length);
             dos.write(payload);
             return boas.toByteArray();
-        } catch (final IOException e) {
+        }
+        catch (final IOException e) {
             throw new AssertionError();
         }
     }
 
-    public static byte[] marshallEnhanced(final byte command, final int identifier,
-            final int expiryTime, final byte[] deviceToken, final byte[] payload) {
+
+    public static byte[] marshallEnhanced(final byte command, final int identifier, final int expiryTime,
+            final byte[] deviceToken, final byte[] payload) {
         final ByteArrayOutputStream boas = new ByteArrayOutputStream();
         final DataOutputStream dos = new DataOutputStream(boas);
 
@@ -185,10 +237,12 @@ public final class Utilities {
             dos.writeShort(payload.length);
             dos.write(payload);
             return boas.toByteArray();
-        } catch (final IOException e) {
+        }
+        catch (final IOException e) {
             throw new AssertionError();
         }
     }
+
 
     public static Map<byte[], Integer> parseFeedbackStreamRaw(final InputStream in) {
         final Map<byte[], Integer> result = new HashMap<byte[], Integer>();
@@ -203,15 +257,18 @@ public final class Utilities {
                 data.readFully(deviceToken);
 
                 result.put(deviceToken, time);
-            } catch (final EOFException e) {
+            }
+            catch (final EOFException e) {
                 break;
-            } catch (final IOException e) {
+            }
+            catch (final IOException e) {
                 throw new RuntimeException(e);
             }
         }
 
         return result;
     }
+
 
     public static Map<String, Date> parseFeedbackStream(final InputStream in) {
         final Map<String, Date> result = new HashMap<String, Date>();
@@ -221,7 +278,7 @@ public final class Utilities {
             final byte[] dtArray = entry.getKey();
             final int time = entry.getValue(); // in seconds
 
-            final Date date = new Date(time * 1000L);    // in ms
+            final Date date = new Date(time * 1000L); // in ms
             final String dtString = encodeHex(dtArray);
             result.put(dtString, date);
         }
@@ -229,31 +286,39 @@ public final class Utilities {
         return result;
     }
 
+
     public static void close(final Closeable closeable) {
         try {
             if (closeable != null) {
                 closeable.close();
             }
-        } catch (final IOException e) {
+        }
+        catch (final IOException e) {
             logger.debug("error while closing resource", e);
         }
     }
+
 
     public static void close(final Socket closeable) {
         try {
             if (closeable != null) {
                 closeable.close();
             }
-        } catch (final IOException e) {
+        }
+        catch (final IOException e) {
             logger.debug("error while closing socket", e);
         }
     }
 
+
     public static void sleep(final int delay) {
         try {
             Thread.sleep(delay);
-        } catch (final InterruptedException e1) {}
+        }
+        catch (final InterruptedException e1) {
+        }
     }
+
 
     public static byte[] copyOf(final byte[] bytes) {
         final byte[] copy = new byte[bytes.length];
@@ -261,37 +326,42 @@ public final class Utilities {
         return copy;
     }
 
+
     public static byte[] copyOfRange(final byte[] original, final int from, final int to) {
         final int newLength = to - from;
         if (newLength < 0) {
             throw new IllegalArgumentException(from + " > " + to);
         }
         final byte[] copy = new byte[newLength];
-        System.arraycopy(original, from, copy, 0,
-                Math.min(original.length - from, newLength));
+        System.arraycopy(original, from, copy, 0, Math.min(original.length - from, newLength));
         return copy;
     }
 
+
     public static void wrapAndThrowAsRuntimeException(final Exception e) throws NetworkIOException {
         if (e instanceof IOException) {
-            throw new NetworkIOException((IOException)e);
-        } else if (e instanceof NetworkIOException) {
-            throw (NetworkIOException)e;
-        } else if (e instanceof RuntimeException) {
-            throw (RuntimeException)e;
-        } else {
+            throw new NetworkIOException((IOException) e);
+        }
+        else if (e instanceof NetworkIOException) {
+            throw (NetworkIOException) e;
+        }
+        else if (e instanceof RuntimeException) {
+            throw (RuntimeException) e;
+        }
+        else {
             throw new RuntimeException(e);
         }
     }
 
+
     public static int parseBytes(final int b1, final int b2, final int b3, final int b4) {
-        return  ((b1 << 3 * 8) & 0xFF000000)
-              | ((b2 << 2 * 8) & 0x00FF0000)
-              | ((b3 << 1 * 8) & 0x0000FF00)
-              | ((b4 << 0 * 8) & 0x000000FF);
+        return b1 << 3 * 8 & 0xFF000000 | b2 << 2 * 8 & 0x00FF0000 | b3 << 1 * 8 & 0x0000FF00 | b4 << 0 * 8
+                & 0x000000FF;
     }
 
-    // @see http://stackoverflow.com/questions/119328/how-do-i-truncate-a-java-string-to-fit-in-a-given-number-of-bytes-once-utf-8-enc
+
+    // @see
+    // http://stackoverflow.com/questions/119328/how-do-i-truncate-a-java-string-to-fit-in-a-given-number-of-bytes-once-utf-8-enc
     public static String truncateWhenUTF8(final String s, final int maxBytes) {
         int b = 0;
         for (int i = 0; i < s.length(); i++) {
@@ -305,13 +375,16 @@ public final class Utilities {
             }
             else if (c <= 0x07FF) {
                 more = 2;
-            } else if (c <= 0xd7ff) {
+            }
+            else if (c <= 0xd7ff) {
                 more = 3;
-            } else if (c <= 0xDFFF) {
+            }
+            else if (c <= 0xDFFF) {
                 // surrogate area, consume next char as well
                 more = 4;
                 skip = 1;
-            } else {
+            }
+            else {
                 more = 3;
             }
 
