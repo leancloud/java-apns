@@ -1,14 +1,15 @@
 package com.notnoop.apns.internal;
 
-import static com.notnoop.apns.internal.MockingUtils.*;
+import static com.notnoop.apns.internal.MockingUtils.mockClosedThenOpenSocket;
+import static com.notnoop.apns.internal.MockingUtils.mockSocketFactory;
 
 import java.io.ByteArrayOutputStream;
 
 import javax.net.SocketFactory;
 
 import org.junit.Assert;
-import org.junit.Test;
 import org.junit.Ignore;
+import org.junit.Test;
 
 import com.notnoop.apns.SimpleApnsNotification;
 
@@ -20,7 +21,7 @@ public class ApnsConnectionTest {
     public void simpleSocket() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         SocketFactory factory = mockSocketFactory(baos, null);
-        packetSentRegardless(factory, baos);
+        this.packetSentRegardless(factory, baos);
     }
 
     @Test
@@ -28,21 +29,21 @@ public class ApnsConnectionTest {
     public void closedSocket() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         SocketFactory factory = mockClosedThenOpenSocket(baos, null, true, 1);
-        packetSentRegardless(factory, baos);
+        this.packetSentRegardless(factory, baos);
     }
 
     @Test
     public void errorOnce() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         SocketFactory factory = mockClosedThenOpenSocket(baos, null, false, 1);
-        packetSentRegardless(factory, baos);
+        this.packetSentRegardless(factory, baos);
     }
 
     @Test
     public void errorTwice() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         SocketFactory factory = mockClosedThenOpenSocket(baos, null, false, 2);
-        packetSentRegardless(factory, baos);
+        this.packetSentRegardless(factory, baos);
     }
 
     /**
@@ -52,14 +53,14 @@ public class ApnsConnectionTest {
     public void errorThrice() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         SocketFactory factory = mockClosedThenOpenSocket(baos, null, false, 3);
-        packetSentRegardless(factory, baos);
+        this.packetSentRegardless(factory, baos);
     }
 
     private void packetSentRegardless(SocketFactory sf, ByteArrayOutputStream baos) {
-        ApnsConnectionImpl connection = new ApnsConnectionImpl(sf, "localhost", 80);
+        ApnsConnectionImpl connection = new ApnsConnectionImpl(sf, "localhost", 80, 1);
         connection.DELAY_IN_MS = 0;
-        connection.sendMessage(msg);
-        Assert.assertArrayEquals(msg.marshall(), baos.toByteArray());
+        connection.sendMessage(this.msg);
+        Assert.assertArrayEquals(this.msg.marshall(), baos.toByteArray());
         connection.close();
     }
 }

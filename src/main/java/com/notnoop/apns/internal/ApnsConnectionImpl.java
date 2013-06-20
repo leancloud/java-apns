@@ -35,6 +35,11 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.Socket;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.net.SocketFactory;
 import javax.net.ssl.SSLSocketFactory;
@@ -49,9 +54,7 @@ import com.notnoop.apns.ReconnectPolicy;
 import com.notnoop.apns.SimpleApnsNotification;
 import com.notnoop.exceptions.ApnsDeliveryErrorException;
 import com.notnoop.exceptions.NetworkIOException;
-import java.util.LinkedList;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+
 
 public class ApnsConnectionImpl implements ApnsConnection {
 
@@ -64,24 +67,26 @@ public class ApnsConnectionImpl implements ApnsConnection {
     private final ApnsDelegate delegate;
     private int cacheLength;
     private final boolean errorDetection;
+    private final int maxNotificationBufferSize;
     private final boolean autoAdjustCacheLength;
     private final ConcurrentLinkedQueue<ApnsNotification> cachedNotifications, notificationsBuffer;
 
-    public ApnsConnectionImpl(SocketFactory factory, String host, int port) {
-        this(factory, host, port, new ReconnectPolicies.Never(), ApnsDelegate.EMPTY);
+
+    public ApnsConnectionImpl(SocketFactory factory, String host, int port, int maxNotificationBufferSize) {
+        this(factory, host, port, new ReconnectPolicies.Never(), ApnsDelegate.EMPTY, maxNotificationBufferSize);
     }
 
-    public ApnsConnectionImpl(SocketFactory factory, String host,
-            int port, ReconnectPolicy reconnectPolicy,
-            ApnsDelegate delegate) {
-        this(factory, host, port, null, reconnectPolicy,
-                delegate, false, ApnsConnection.DEFAULT_CACHE_LENGTH, true);
+
+    public ApnsConnectionImpl(SocketFactory factory, String host, int port, ReconnectPolicy reconnectPolicy,
+            ApnsDelegate delegate, int maxNotificationBufferSize) {
+        this(factory, host, port, null, reconnectPolicy, delegate, false, ApnsConnection.DEFAULT_CACHE_LENGTH, true,
+            maxNotificationBufferSize);
     }
 
-    public ApnsConnectionImpl(SocketFactory factory, String host,
-            int port, Proxy proxy,
-            ReconnectPolicy reconnectPolicy, ApnsDelegate delegate,
-            boolean errorDetection, int cacheLength, boolean autoAdjustCacheLength) {
+
+    public ApnsConnectionImpl(SocketFactory factory, String host, int port, Proxy proxy,
+            ReconnectPolicy reconnectPolicy, ApnsDelegate delegate, boolean errorDetection, int cacheLength,
+            boolean autoAdjustCacheLength, int maxNotificationBufferSize) {
         this.factory = factory;
         this.host = host;
         this.port = port;
@@ -90,14 +95,33 @@ public class ApnsConnectionImpl implements ApnsConnection {
         this.proxy = proxy;
         this.errorDetection = errorDetection;
         this.cacheLength = cacheLength;
+        this.maxNotificationBufferSize = maxNotificationBufferSize;
         this.autoAdjustCacheLength = autoAdjustCacheLength;
-        cachedNotifications = new ConcurrentLinkedQueue<ApnsNotification>();
-        notificationsBuffer = new ConcurrentLinkedQueue<ApnsNotification>();
+        this.cachedNotifications = new ConcurrentLinkedQueue<ApnsNotification>();
+        this.notificationsBuffer = new ConcurrentLinkedQueue<ApnsNotification>();
     }
 
-    public synchronized void close() {
-        Utilities.close(socket);
+
+    public void shrinkResendNotificationBuffer() {
+        this.drainBuffer();
+        synchronized (this) {
+            try {
+                while (this.notificationsBuffer.size() > this.maxNotificationBufferSize) {
+                    this.wait();
+                }
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
+
+
+    @Override
+    public synchronized void close() {
+        Utilities.close(this.socket);
+    }
+
 
     private void monitorSocket(final Socket socket) {
         class MonitoringThread extends Thread {
@@ -126,8 +150,8 @@ public class ApnsConnectionImpl implements ApnsConnection {
                         ApnsNotification notification = null;
                         boolean foundNotification = false;
 
-                        while (!cachedNotifications.isEmpty()) {
-                            notification = cachedNotifications.poll();
+                        while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
+                            notification = ApnsConnectionImpl.this.cachedNotifications.poll();
 
                             if (notification.getIdentifier() == id) {
                                 foundNotification = true;
@@ -137,173 +161,215 @@ public class ApnsConnectionImpl implements ApnsConnection {
                         }
 
                         if (foundNotification) {
-                            delegate.messageSendFailed(notification, new ApnsDeliveryErrorException(e));
-                        } else {
-                            cachedNotifications.addAll(tempCache);
+                            ApnsConnectionImpl.this.delegate.messageSendFailed(notification,
+                                new ApnsDeliveryErrorException(e));
+                        }
+                        else {
+                            ApnsConnectionImpl.this.cachedNotifications.addAll(tempCache);
                             int resendSize = tempCache.size();
-                            logger.warn("Received error for message "
-                                    + "that wasn't in the cache...");
-                            if (autoAdjustCacheLength) {
-                                cacheLength = cacheLength + (resendSize / 2);
-                                delegate.cacheLengthExceeded(cacheLength);
+                            logger.warn("Received error for message " + "that wasn't in the cache...");
+                            if (ApnsConnectionImpl.this.autoAdjustCacheLength) {
+                                ApnsConnectionImpl.this.cacheLength =
+                                        ApnsConnectionImpl.this.cacheLength + resendSize / 2;
+                                ApnsConnectionImpl.this.delegate
+                                .cacheLengthExceeded(ApnsConnectionImpl.this.cacheLength);
                             }
-                            delegate.messageSendFailed(null, new ApnsDeliveryErrorException(e));
+                            ApnsConnectionImpl.this.delegate.messageSendFailed(null, new ApnsDeliveryErrorException(e));
                         }
 
                         int resendSize = 0;
 
-                        while (!cachedNotifications.isEmpty()) {
+                        while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
                             resendSize++;
-                            notificationsBuffer.add(cachedNotifications.poll());
+                            ApnsConnectionImpl.this.notificationsBuffer.add(ApnsConnectionImpl.this.cachedNotifications
+                                .poll());
                         }
-                        delegate.notificationsResent(resendSize);
-
-                        delegate.connectionClosed(e, id);
-
-                        drainBuffer();
+                        ApnsConnectionImpl.this.delegate.notificationsResent(resendSize);
+                        ApnsConnectionImpl.this.delegate.connectionClosed(e, id);
                     }
 
-                } catch (Exception e) {
-                    // An exception when reading the error code is non-critical, it will cause another retry
-                    // sending the message. Other than providing a more stable network connection to the APNS
-                    // server we can't do much about it - so let's not spam the application's error log.
-                    logger.info("Exception while waiting for error code", e);
-                    delegate.connectionClosed(DeliveryError.UNKNOWN, -1);
-                } finally {
-                    close();
                 }
+                catch (Exception e) {
+                    logger.info("Exception while waiting for error code", e);
+                    ApnsConnectionImpl.this.delegate.connectionClosed(DeliveryError.UNKNOWN, -1);
+                }
+                finally {
+                    ApnsConnectionImpl.this.close();
+                    // At last,we retry to send error notifications.
+                    ApnsConnectionImpl.this.drainBuffer();
+                }
+
             }
         }
         Thread t = new MonitoringThread();
         t.setDaemon(true);
         t.start();
     }
-    // This method is only called from sendMessage.  sendMessage
+
+    // This method is only called from sendMessage. sendMessage
     // has the required logic for retrying
     private Socket socket;
 
+
     private synchronized Socket socket() throws NetworkIOException {
-        if (reconnectPolicy.shouldReconnect()) {
-            Utilities.close(socket);
-            socket = null;
+        if (this.reconnectPolicy.shouldReconnect()) {
+            Utilities.close(this.socket);
+            this.socket = null;
         }
 
-        if (socket == null || socket.isClosed()) {
+        if (this.socket == null || this.socket.isClosed()) {
             try {
-                if (proxy == null) {
-                    socket = factory.createSocket(host, port);
-                } else if (proxy.type() == Proxy.Type.HTTP) {
+                if (this.proxy == null) {
+                    this.socket = this.factory.createSocket(this.host, this.port);
+                }
+                else if (this.proxy.type() == Proxy.Type.HTTP) {
                     TlsTunnelBuilder tunnelBuilder = new TlsTunnelBuilder();
-                    socket = tunnelBuilder.build((SSLSocketFactory) factory, proxy, host, port);
-                } else {
+                    this.socket =
+                            tunnelBuilder.build((SSLSocketFactory) this.factory, this.proxy, this.host, this.port);
+                }
+                else {
                     boolean success = false;
                     Socket proxySocket = null;
                     try {
-                        proxySocket = new Socket(proxy);
-                        proxySocket.connect(new InetSocketAddress(host, port));
-                        socket = ((SSLSocketFactory) factory).createSocket(proxySocket, host, port, false);
+                        proxySocket = new Socket(this.proxy);
+                        proxySocket.connect(new InetSocketAddress(this.host, this.port));
+                        this.socket =
+                                ((SSLSocketFactory) this.factory)
+                                .createSocket(proxySocket, this.host, this.port, false);
                         success = true;
-                    } finally {
+                    }
+                    finally {
                         if (!success) {
                             Utilities.close(proxySocket);
                         }
                     }
                 }
 
-                if (errorDetection) {
-                    monitorSocket(socket);
+                if (this.errorDetection) {
+                    this.monitorSocket(this.socket);
                 }
 
-                reconnectPolicy.reconnected();
+                this.reconnectPolicy.reconnected();
                 logger.debug("Made a new connection to APNS");
-            } catch (IOException e) {
+            }
+            catch (IOException e) {
                 logger.error("Couldn't connect to APNS server", e);
                 throw new NetworkIOException(e);
             }
         }
-        return socket;
+        return this.socket;
     }
+
     int DELAY_IN_MS = 1000;
     private static final int RETRIES = 3;
 
+
+    @Override
     public synchronized void sendMessage(ApnsNotification m) throws NetworkIOException {
-        sendMessage(m, false);
+        this.shrinkResendNotificationBuffer();
+        this.sendMessage(m, false);
     }
 
-    public synchronized void sendMessage(ApnsNotification m, boolean fromBuffer) throws NetworkIOException {
 
+    public synchronized void sendMessage(ApnsNotification m, boolean fromBuffer) throws NetworkIOException {
         int attempts = 0;
         while (true) {
             try {
                 attempts++;
-                Socket socket = socket();
+                Socket socket = this.socket();
                 socket.getOutputStream().write(m.marshall());
                 socket.getOutputStream().flush();
-                cacheNotification(m);
+                this.cacheNotification(m);
 
-                delegate.messageSent(m, fromBuffer);
+                this.delegate.messageSent(m, fromBuffer);
 
                 logger.debug("Message \"{}\" sent", m);
 
                 attempts = 0;
-                drainBuffer();
+                this.drainBuffer();
                 break;
-            } catch (Exception e) {
-                Utilities.close(socket);
-                socket = null;
+            }
+            catch (Exception e) {
+                Utilities.close(this.socket);
+                this.socket = null;
                 if (attempts >= RETRIES) {
                     logger.error("Couldn't send message after " + RETRIES + " retries." + m, e);
-                    delegate.messageSendFailed(m, e);
+                    this.delegate.messageSendFailed(m, e);
                     Utilities.wrapAndThrowAsRuntimeException(e);
                 }
                 // The first failure might be due to closed connection
                 // don't delay quite yet
                 if (attempts != 1) {
-                    // Do not spam the log files when the APNS server closed the socket (due to a
-                    // bad token, for example), only log when on the second retry.
+                    // Do not spam the log files when the APNS server closed the
+                    // socket (due to a
+                    // bad token, for example), only log when on the second
+                    // retry.
                     logger.info("Failed to send message " + m + "... trying again after delay", e);
-                    Utilities.sleep(DELAY_IN_MS);
+                    Utilities.sleep(this.DELAY_IN_MS);
                 }
             }
         }
     }
 
+    private final Lock resendLock = new ReentrantLock();
+
+
     private void drainBuffer() {
-        if (!notificationsBuffer.isEmpty()) {
-            sendMessage(notificationsBuffer.poll(), true);
+        if (this.resendLock.tryLock()) {
+            try {
+                if (!this.notificationsBuffer.isEmpty()) {
+                    this.sendMessage(this.notificationsBuffer.poll(), true);
+                }
+            }
+            finally {
+                this.resendLock.unlock();
+            }
         }
     }
 
+
     private void cacheNotification(ApnsNotification notification) {
-        cachedNotifications.add(notification);
-        while (cachedNotifications.size() > cacheLength) {
-            cachedNotifications.poll();
+        this.cachedNotifications.add(notification);
+        while (this.cachedNotifications.size() > this.cacheLength) {
+            this.cachedNotifications.poll();
             logger.debug("Removing notification from cache " + notification);
         }
     }
 
+
+    @Override
     public ApnsConnectionImpl copy() {
-        return new ApnsConnectionImpl(factory, host, port, proxy, reconnectPolicy.copy(),
-                delegate, errorDetection, cacheLength, autoAdjustCacheLength);
+        return new ApnsConnectionImpl(this.factory, this.host, this.port, this.proxy, this.reconnectPolicy.copy(),
+            this.delegate, this.errorDetection, this.cacheLength, this.autoAdjustCacheLength,
+            this.maxNotificationBufferSize);
     }
 
+
+    @Override
     public void testConnection() throws NetworkIOException {
         ApnsConnectionImpl testConnection = null;
         try {
-            testConnection = new ApnsConnectionImpl(factory, host, port, reconnectPolicy.copy(), ApnsDelegate.EMPTY);
-            testConnection.sendMessage(new SimpleApnsNotification(new byte[]{0}, new byte[]{0}));
-        } finally {
+            testConnection =
+                    new ApnsConnectionImpl(this.factory, this.host, this.port, this.reconnectPolicy.copy(),
+                        ApnsDelegate.EMPTY, this.maxNotificationBufferSize);
+            testConnection.sendMessage(new SimpleApnsNotification(new byte[] { 0 }, new byte[] { 0 }));
+        }
+        finally {
             if (testConnection != null) {
                 testConnection.close();
             }
         }
     }
 
+
+    @Override
     public void setCacheLength(int cacheLength) {
         this.cacheLength = cacheLength;
     }
 
+
+    @Override
     public int getCacheLength() {
-        return cacheLength;
+        return this.cacheLength;
     }
 }

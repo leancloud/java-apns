@@ -111,6 +111,8 @@ public class ApnsServiceBuilder {
     private Proxy proxy = null;
     private boolean errorDetection = true;
 
+    private final int maxNotificationBufferSize = 100;
+
 
     /**
      * Constructs a new instance of {@code ApnsServiceBuilder}
@@ -608,7 +610,8 @@ public class ApnsServiceBuilder {
 
         ApnsConnection conn =
                 new ApnsConnectionImpl(sslFactory, this.gatewayHost, this.gatewaPort, this.proxy, this.reconnectPolicy,
-                    this.delegate, this.errorDetection, this.cacheLength, this.autoAdjustCacheLength);
+                    this.delegate, this.errorDetection, this.cacheLength, this.autoAdjustCacheLength,
+                    this.maxNotificationBufferSize);
         if (this.pooledMax != 1) {
             conn = new ApnsPooledConnection(conn, this.pooledMax, this.executor);
         }
