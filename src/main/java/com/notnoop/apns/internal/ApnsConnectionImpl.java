@@ -324,6 +324,9 @@ public class ApnsConnectionImpl implements ApnsConnection {
             finally {
                 this.resendLock.unlock();
             }
+            synchronized (this) {
+                this.notifyAll();
+            }
         }
     }
 
