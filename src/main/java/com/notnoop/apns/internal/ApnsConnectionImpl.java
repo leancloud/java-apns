@@ -28,6 +28,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -129,58 +130,75 @@ public class ApnsConnectionImpl implements ApnsConnection {
                     // TODO(jwilson): this should readFully()
                     final int expectedSize = 6;
                     byte[] bytes = new byte[expectedSize];
-                    while (in.read(bytes) == expectedSize) {
+                    while (true) {
+                        try {
+                            if (in.read(bytes) == expectedSize) {
+                                int command = bytes[0] & 0xFF;
+                                if (command != 8) {
+                                    throw new IOException("Unexpected command byte " + command);
+                                }
+                                int statusCode = bytes[1] & 0xFF;
+                                DeliveryError e = DeliveryError.ofCode(statusCode);
 
-                        int command = bytes[0] & 0xFF;
-                        if (command != 8) {
-                            throw new IOException("Unexpected command byte " + command);
-                        }
-                        int statusCode = bytes[1] & 0xFF;
-                        DeliveryError e = DeliveryError.ofCode(statusCode);
+                                int id =
+                                        Utilities
+                                        .parseBytes(bytes[2], bytes[3], bytes[4], bytes[5]);
 
-                        int id = Utilities.parseBytes(bytes[2], bytes[3], bytes[4], bytes[5]);
+                                Queue<ApnsNotification> tempCache =
+                                        new LinkedList<ApnsNotification>();
+                                ApnsNotification notification = null;
+                                boolean foundNotification = false;
 
-                        Queue<ApnsNotification> tempCache = new LinkedList<ApnsNotification>();
-                        ApnsNotification notification = null;
-                        boolean foundNotification = false;
+                                while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
+                                    notification =
+                                            ApnsConnectionImpl.this.cachedNotifications.poll();
 
-                        while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
-                            notification = ApnsConnectionImpl.this.cachedNotifications.poll();
+                                    if (notification.getIdentifier() == id) {
+                                        foundNotification = true;
+                                        break;
+                                    }
+                                    tempCache.add(notification);
+                                }
 
-                            if (notification.getIdentifier() == id) {
-                                foundNotification = true;
+                                if (foundNotification) {
+                                    ApnsConnectionImpl.this.delegate.messageSendFailed(
+                                        notification, new ApnsDeliveryErrorException(e));
+                                } else {
+                                    ApnsConnectionImpl.this.cachedNotifications.addAll(tempCache);
+                                    int resendSize = tempCache.size();
+                                    logger.warn("Received error for message "
+                                            + "that wasn't in the cache...");
+                                    if (ApnsConnectionImpl.this.autoAdjustCacheLength) {
+                                        ApnsConnectionImpl.this.cacheLength =
+                                                ApnsConnectionImpl.this.cacheLength + resendSize
+                                                / 2;
+                                        ApnsConnectionImpl.this.delegate
+                                        .cacheLengthExceeded(ApnsConnectionImpl.this.cacheLength);
+                                    }
+                                    ApnsConnectionImpl.this.delegate.messageSendFailed(null,
+                                        new ApnsDeliveryErrorException(e));
+                                }
+
+                                int resendSize = 0;
+
+                                while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
+                                    resendSize++;
+                                    ApnsConnectionImpl.this.notificationsBuffer
+                                    .add(ApnsConnectionImpl.this.cachedNotifications.poll());
+                                }
+                                ApnsConnectionImpl.this.delegate.notificationsResent(resendSize);
+                                ApnsConnectionImpl.this.delegate.connectionClosed(e, id);
+                            } else {
+                                // read unexpect data
                                 break;
                             }
-                            tempCache.add(notification);
-                        }
-
-                        if (foundNotification) {
-                            ApnsConnectionImpl.this.delegate.messageSendFailed(notification,
-                                new ApnsDeliveryErrorException(e));
-                        } else {
-                            ApnsConnectionImpl.this.cachedNotifications.addAll(tempCache);
-                            int resendSize = tempCache.size();
-                            logger.warn("Received error for message "
-                                    + "that wasn't in the cache...");
-                            if (ApnsConnectionImpl.this.autoAdjustCacheLength) {
-                                ApnsConnectionImpl.this.cacheLength =
-                                        ApnsConnectionImpl.this.cacheLength + resendSize / 2;
-                                ApnsConnectionImpl.this.delegate
-                                .cacheLengthExceeded(ApnsConnectionImpl.this.cacheLength);
+                        } catch (SocketTimeoutException e) {
+                            if (socket.isConnected() && !socket.isClosed()) {
+                                continue;
+                            } else {
+                                throw e;
                             }
-                            ApnsConnectionImpl.this.delegate.messageSendFailed(null,
-                                new ApnsDeliveryErrorException(e));
                         }
-
-                        int resendSize = 0;
-
-                        while (!ApnsConnectionImpl.this.cachedNotifications.isEmpty()) {
-                            resendSize++;
-                            ApnsConnectionImpl.this.notificationsBuffer
-                            .add(ApnsConnectionImpl.this.cachedNotifications.poll());
-                        }
-                        ApnsConnectionImpl.this.delegate.notificationsResent(resendSize);
-                        ApnsConnectionImpl.this.delegate.connectionClosed(e, id);
                     }
 
                 } catch (Exception e) {
@@ -238,7 +256,7 @@ public class ApnsConnectionImpl implements ApnsConnection {
 
                 if (this.socket != null) {
                     try {
-                        this.socket.setSoTimeout(40000);
+                        this.socket.setSoTimeout(60000);
                         this.socket.setReceiveBufferSize(64 * 1024);
                         this.socket.setSendBufferSize(64 * 1024);
                     } catch (IOException e) {
