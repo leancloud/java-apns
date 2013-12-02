@@ -202,7 +202,9 @@ public class ApnsConnectionImpl implements ApnsConnection {
                     }
 
                 } catch (Exception e) {
-                    logger.info("Exception while waiting for error code", e);
+                    if(!(e instanceof SocketTimeoutException)){
+                        logger.info("Exception while waiting for error code", e);
+                    }
                     ApnsConnectionImpl.this.delegate.connectionClosed(DeliveryError.UNKNOWN, -1);
                 } finally {
                     ApnsConnectionImpl.this.close();
