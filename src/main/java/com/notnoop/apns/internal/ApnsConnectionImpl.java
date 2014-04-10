@@ -123,6 +123,11 @@ public class ApnsConnectionImpl implements ApnsConnection {
 
             @Override
             public void run() {
+                processSendFailures(socket);
+
+            }
+
+            private void processSendFailures(final Socket socket) {
                 InputStream in = null;
                 try {
                     in = socket.getInputStream();
@@ -135,8 +140,13 @@ public class ApnsConnectionImpl implements ApnsConnection {
                             // Added synchronized on monitor thread by dennis(xzhuang@avoscloud.com)
                             // 20140410
                             int readed = -1;
-                            synchronized (ApnsConnectionImpl.this) {
-                                readed = in.read(bytes);
+                            if (in.available() > 0) {
+                                synchronized (ApnsConnectionImpl.this) {
+                                    readed = in.read(bytes);
+                                }
+                            } else {
+                                Thread.sleep(100);
+                                continue;
                             }
                             if (readed == expectedSize) {
                                 int command = bytes[0] & 0xFF;
@@ -223,7 +233,6 @@ public class ApnsConnectionImpl implements ApnsConnection {
                     // At last,we retry to send error notifications.
                     ApnsConnectionImpl.this.drainBuffer();
                 }
-
             }
         }
         Thread t = new MonitoringThread();
@@ -297,13 +306,13 @@ public class ApnsConnectionImpl implements ApnsConnection {
 
 
     @Override
-    public synchronized void sendMessage(ApnsNotification m) throws NetworkIOException {
+    public void sendMessage(ApnsNotification m) throws NetworkIOException {
         this.shrinkResendNotificationBuffer();
         this.sendMessage(m, false);
     }
 
 
-    public synchronized void sendMessage(ApnsNotification m, boolean fromBuffer)
+    private synchronized void sendMessage(ApnsNotification m, boolean fromBuffer)
             throws NetworkIOException {
         int attempts = 0;
         OutputStream outputStream = null;
