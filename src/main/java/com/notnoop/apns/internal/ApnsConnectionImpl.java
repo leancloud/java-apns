@@ -123,16 +123,22 @@ public class ApnsConnectionImpl implements ApnsConnection {
 
             @Override
             public void run() {
-
+                InputStream in = null;
                 try {
-                    InputStream in = socket.getInputStream();
+                    in = socket.getInputStream();
 
                     // TODO(jwilson): this should readFully()
                     final int expectedSize = 6;
                     byte[] bytes = new byte[expectedSize];
                     while (true) {
                         try {
-                            if (in.read(bytes) == expectedSize) {
+                            // Added synchronized on monitor thread by dennis(xzhuang@avoscloud.com)
+                            // 20140410
+                            int readed = -1;
+                            synchronized (ApnsConnectionImpl.this) {
+                                readed = in.read(bytes);
+                            }
+                            if (readed == expectedSize) {
                                 int command = bytes[0] & 0xFF;
                                 if (command != 8) {
                                     throw new IOException("Unexpected command byte " + command);
@@ -192,6 +198,7 @@ public class ApnsConnectionImpl implements ApnsConnection {
                                 // read unexpect data
                                 break;
                             }
+
                         } catch (SocketTimeoutException e) {
                             if (socket.isConnected() && !socket.isClosed()) {
                                 continue;
@@ -202,11 +209,16 @@ public class ApnsConnectionImpl implements ApnsConnection {
                     }
 
                 } catch (Exception e) {
-                    if(!(e instanceof SocketTimeoutException)){
+                    if (!(e instanceof SocketTimeoutException)) {
                         logger.info("Exception while waiting for error code", e);
                     }
                     ApnsConnectionImpl.this.delegate.connectionClosed(DeliveryError.UNKNOWN, -1);
                 } finally {
+                    if (in != null) {
+                        synchronized (ApnsConnectionImpl.this) {
+                            Utilities.close(in);
+                        }
+                    }
                     ApnsConnectionImpl.this.close();
                     // At last,we retry to send error notifications.
                     ApnsConnectionImpl.this.drainBuffer();
@@ -294,11 +306,12 @@ public class ApnsConnectionImpl implements ApnsConnection {
     public synchronized void sendMessage(ApnsNotification m, boolean fromBuffer)
             throws NetworkIOException {
         int attempts = 0;
+        OutputStream outputStream = null;
         while (true) {
             try {
                 attempts++;
                 Socket socket = this.socket();
-                OutputStream outputStream = socket.getOutputStream();
+                outputStream = socket.getOutputStream();
                 outputStream.write(m.marshall());
                 outputStream.flush();
                 this.cacheNotification(m);
@@ -311,6 +324,9 @@ public class ApnsConnectionImpl implements ApnsConnection {
                 this.drainBuffer();
                 break;
             } catch (Exception e) {
+                if (outputStream != null) {
+                    Utilities.close(outputStream);
+                }
                 Utilities.close(this.socket);
                 this.socket = null;
                 if (attempts >= RETRIES) {
