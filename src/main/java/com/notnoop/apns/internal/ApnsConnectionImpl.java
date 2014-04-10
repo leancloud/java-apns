@@ -279,7 +279,8 @@ public class ApnsConnectionImpl implements ApnsConnection {
 
                 if (this.socket != null) {
                     try {
-                        this.socket.setSoTimeout(60000);
+                        this.socket.setSoTimeout(30000);
+                        this.socket.setSoLinger(true, 30);
                         this.socket.setReceiveBufferSize(64 * 1024);
                         this.socket.setSendBufferSize(64 * 1024);
                     } catch (IOException e) {
