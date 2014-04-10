@@ -219,15 +219,14 @@ public class ApnsConnectionImpl implements ApnsConnection {
                     }
 
                 } catch (Exception e) {
-                    if (!(e instanceof SocketTimeoutException)) {
+                    if (!(e instanceof SocketTimeoutException)
+                            && (!e.getMessage().contains("Socket is closed"))) {
                         logger.info("Exception while waiting for error code", e);
                     }
                     ApnsConnectionImpl.this.delegate.connectionClosed(DeliveryError.UNKNOWN, -1);
                 } finally {
                     if (in != null) {
-                        synchronized (ApnsConnectionImpl.this) {
-                            Utilities.close(in);
-                        }
+                        Utilities.close(in);
                     }
                     ApnsConnectionImpl.this.close();
                     // At last,we retry to send error notifications.
@@ -313,49 +312,52 @@ public class ApnsConnectionImpl implements ApnsConnection {
     }
 
 
-    private synchronized void sendMessage(ApnsNotification m, boolean fromBuffer)
-            throws NetworkIOException {
-        int attempts = 0;
-        OutputStream outputStream = null;
-        while (true) {
-            try {
-                attempts++;
-                Socket socket = this.socket();
-                outputStream = socket.getOutputStream();
-                outputStream.write(m.marshall());
-                outputStream.flush();
-                this.cacheNotification(m);
+    private void sendMessage(ApnsNotification m, boolean fromBuffer) throws NetworkIOException {
+        synchronized (this) {
+            int attempts = 0;
+            OutputStream outputStream = null;
+            while (true) {
+                try {
+                    attempts++;
+                    Socket socket = this.socket();
+                    outputStream = socket.getOutputStream();
+                    outputStream.write(m.marshall());
+                    outputStream.flush();
+                    this.cacheNotification(m);
 
-                this.delegate.messageSent(m, fromBuffer);
+                    this.delegate.messageSent(m, fromBuffer);
 
-                logger.debug("Message \"{}\" sent", m);
+                    logger.debug("Message \"{}\" sent", m);
 
-                attempts = 0;
-                this.drainBuffer();
-                break;
-            } catch (Exception e) {
-                if (outputStream != null) {
-                    Utilities.close(outputStream);
-                }
-                Utilities.close(this.socket);
-                this.socket = null;
-                if (attempts >= RETRIES) {
-                    logger.error("Couldn't send message after " + RETRIES + " retries." + m, e);
-                    this.delegate.messageSendFailed(m, e);
-                    Utilities.wrapAndThrowAsRuntimeException(e);
-                }
-                // The first failure might be due to closed connection
-                // don't delay quite yet
-                if (attempts != 1) {
-                    // Do not spam the log files when the APNS server closed the
-                    // socket (due to a
-                    // bad token, for example), only log when on the second
-                    // retry.
-                    logger.info("Failed to send message " + m + "... trying again after delay", e);
-                    Utilities.sleep(this.DELAY_IN_MS);
+                    attempts = 0;
+
+                    break;
+                } catch (Exception e) {
+                    if (outputStream != null) {
+                        Utilities.close(outputStream);
+                    }
+                    Utilities.close(this.socket);
+                    this.socket = null;
+                    if (attempts >= RETRIES) {
+                        logger.error("Couldn't send message after " + RETRIES + " retries." + m, e);
+                        this.delegate.messageSendFailed(m, e);
+                        Utilities.wrapAndThrowAsRuntimeException(e);
+                    }
+                    // The first failure might be due to closed connection
+                    // don't delay quite yet
+                    if (attempts != 1) {
+                        // Do not spam the log files when the APNS server closed the
+                        // socket (due to a
+                        // bad token, for example), only log when on the second
+                        // retry.
+                        logger.info("Failed to send message " + m + "... trying again after delay",
+                            e);
+                        Utilities.sleep(this.DELAY_IN_MS);
+                    }
                 }
             }
         }
+        this.drainBuffer();
     }
 
     private final Lock resendLock = new ReentrantLock();
