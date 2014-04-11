@@ -54,6 +54,8 @@ public interface ApnsNotification {
      */
     public int getIdentifier();
 
+    public int increaseRetryAndGet();
+
     /**
      * Returns the expiry date of the notification, a fixed UNIX
      * epoch date expressed in seconds

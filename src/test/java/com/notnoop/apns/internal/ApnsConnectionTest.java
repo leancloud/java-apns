@@ -57,7 +57,7 @@ public class ApnsConnectionTest {
     }
 
     private void packetSentRegardless(SocketFactory sf, ByteArrayOutputStream baos) {
-        ApnsConnectionImpl connection = new ApnsConnectionImpl(sf, "localhost", 80, 1);
+        ApnsConnectionImpl connection = new ApnsConnectionImpl(sf, "localhost", 80);
         connection.DELAY_IN_MS = 0;
         connection.sendMessage(this.msg);
         Assert.assertArrayEquals(this.msg.marshall(), baos.toByteArray());

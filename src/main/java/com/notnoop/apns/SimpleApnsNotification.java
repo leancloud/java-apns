@@ -57,6 +57,15 @@ public class SimpleApnsNotification implements ApnsNotification {
         this.payload = Utilities.toUTF8Bytes(payload);
     }
 
+
+
+    @Override
+    public int increaseRetryAndGet() {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+
     /**
      * Constructs an instance of {@code ApnsNotification}.
      *
@@ -93,8 +102,9 @@ public class SimpleApnsNotification implements ApnsNotification {
      * (on the wire/socket) without any modification.
      */
     public byte[] marshall() {
-        if (marshall == null)
+        if (marshall == null) {
             marshall = Utilities.marshall(COMMAND, deviceToken, payload);
+        }
         return marshall;
     }
 
@@ -114,14 +124,15 @@ public class SimpleApnsNotification implements ApnsNotification {
     @Override
     public int hashCode() {
         return 21
-               + 31 * Arrays.hashCode(deviceToken)
-               + 31 * Arrays.hashCode(payload);
+                + 31 * Arrays.hashCode(deviceToken)
+                + 31 * Arrays.hashCode(payload);
     }
 
     @Override
     public boolean equals(Object obj) {
-        if (!(obj instanceof SimpleApnsNotification))
+        if (!(obj instanceof SimpleApnsNotification)) {
             return false;
+        }
         SimpleApnsNotification o = (SimpleApnsNotification)obj;
         return Arrays.equals(this.deviceToken, o.deviceToken)
                 && Arrays.equals(this.payload, o.payload);
@@ -134,13 +145,13 @@ public class SimpleApnsNotification implements ApnsNotification {
     public int getExpiry() {
         return -1;
     }
-    
+
     @Override
     public String toString() {
         String payloadString = "???";
         try {
             payloadString = new String(payload, "UTF-8");
-        } catch (Exception _) {}        
+        } catch (Exception _) {}
         return "Message(Token="+Utilities.encodeHex(deviceToken)+"; Payload="+payloadString+")";
     }
 }
